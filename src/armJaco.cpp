@@ -125,10 +125,11 @@ int main(int argc, char** argv){
 		arm->sendArmPoseGoal(goal);
 		loop_rate.sleep();
 		arm->sendFingerPoseGoal(float(55)); //Closing
-    loop_rate.speep();
-    arm->sendFingerPoseGoal(float(0)); //Opening
-    loop_rate.sleep();
-    arm->goHome()
+    		loop_rate.speep();
+    		arm->sendFingerPoseGoal(float(0)); //Opening
+    		loop_rate.sleep();
+    		arm->goHome();
+		loop_rate.sleep();
 		break;
 		ros::spinOnce();
     }
