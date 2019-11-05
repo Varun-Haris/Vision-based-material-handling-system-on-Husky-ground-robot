@@ -122,6 +122,7 @@ int main(int argc, char** argv){
 	goal.pose.position.x = goal.pose.position.x + 1;
 
 	while(true){
+		ros::spinOnce();
 		arm->sendArmPoseGoal(goal);
 		loop_rate.sleep();
 		arm->sendFingerPoseGoal(float(55)); //Closing
@@ -131,7 +132,6 @@ int main(int argc, char** argv){
     		arm->goHome();
 		loop_rate.sleep();
 		break;
-		ros::spinOnce();
     }
 	return 0;
 }
