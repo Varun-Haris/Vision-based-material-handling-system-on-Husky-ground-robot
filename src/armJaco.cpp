@@ -1,6 +1,7 @@
 #include <string>
 #include <algorithm>
 #include <math.h>
+#include <vector>
 #include <ros/ros.h>
 #include <geometry_msgs/PoseStamped.h>
 #include "kinova_driver/kinova_api.h"
@@ -10,11 +11,6 @@
 #include "kinova_driver/kinova_fingers_action.h"
 #include "kinova_driver/kinova_joint_trajectory_controller.h"
 
-#include <tf/tf.h>
-#include <tf/transform_broadcaster.h>
-#include <tf/LinearMath/Scalar.h>
-#include <tf/transform_listener.h>
-
 #include <actionlib/client/simple_action_client.h>
 
 using namespace std;
@@ -23,47 +19,23 @@ using namespace std;
 typedef actionlib::SimpleActionClient<kinova_msgs::ArmPoseAction> armPose;
 typedef actionlib::SimpleActionClient<kinova_msgs::SetFingersPositionAction> fingerPose;
 
-bool getCurrentCommand = false;
+bool homeSet = false;
+bool waypointSet = false;
 const double FINGER_MAX = 6400;
-
-
-geometry_msgs::Quaternion quaternionNorm(geometry_msgs::Quaternion q){
-	float q_norm = sqrt(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w);	
-	q.x = q.x/q_norm;
-	q.y = q.y/q_norm;
-	q.z = q.z/q_norm;
-	q.w = q.w/q_norm;
-	return q;
-}
 
 class armJaco{
 public:
 	ros::NodeHandle nh;
 	ros::Subscriber sub;
-	kinova_msgs::KinovaPose current_pose;
-	tf::Pose home_pose; // home position
+	geometry_msgs::PoseStamped currentPose;
 
 	armJaco():nh(){
-		sub = nh.subscribe("/j2n6s300_driver/out/cartesian_command",1,&armJaco::currentPoseFeedback,this);
+		sub = nh.subscribe("/j2n6s300_driver/out/tool_pose",1,&armJaco::getArmPose,this);
 		ROS_INFO_STREAM("Setup successful !!");
 	}
 
-	void currentPoseFeedback(const kinova_msgs::KinovaPoseConstPtr pose){
-	    current_pose.X = pose->X;
-	    current_pose.Y = pose->Y;
-	    current_pose.Z = pose->Z;
-	    current_pose.ThetaX = pose->ThetaX;
-	    current_pose.ThetaY = pose->ThetaY;
-	    current_pose.ThetaZ = pose->ThetaZ;
-
-	    if (getCurrentCommand == false){
-	        home_pose.setOrigin(tf::Vector3(current_pose.X, current_pose.Y, current_pose.Z));
-	        tf::Quaternion q = kinova::EulerXYZ2Quaternion(current_pose.ThetaX, current_pose.ThetaY, current_pose.ThetaZ);
-	        home_pose.setRotation(q);
-
-	        ROS_INFO_STREAM("Home position set");
-	        getCurrentCommand = true;
-	    }
+	void getArmPose(const geometry_msgs::PoseStamped& pose){
+	    currentPose = pose;
 	}
 
 	void sendArmPoseGoal(geometry_msgs::PoseStamped &goal_pose){
@@ -91,16 +63,12 @@ public:
 		client.sendGoal(goal);
 	}
 
-	void goHome(){
-		geometry_msgs::PoseStamped home;
+	void goHome(geometry_msgs::PoseStamped home){
 		home.header.stamp = ros::Time::now();
 		home.header.frame_id = "j2n6s300_link_base";
-		tf::poseTFToMsg(home_pose, home.pose);
-		home.pose.orientation = quaternionNorm(home.pose.orientation); // Quaternion normalization from tf::Quaternion to geometry_msgs::Quaternion
-
-		sendArmPoseGoal(home);
-		sendFingerPoseGoal(0);
-		ROS_INFO_STREAM("Back home !!");
+		
+		this->sendArmPoseGoal(home);
+		ROS_INFO_STREAM("Back home");
 	}
 
 };
@@ -108,29 +76,35 @@ public:
 int main(int argc, char** argv){
 	ros::init(argc, argv, "Jaco");
 	ros::NodeHandle nh;
-	ros::Rate loop_rate(0.1);
+	ros::Rate loop_rate(0.2);
 	armJaco *arm = new armJaco;
-	cout << arm->current_pose <<endl;
+	usleep(1000*1000);
 
-	geometry_msgs::PoseStamped goal, home;
-	tf::poseTFToMsg(arm->home_pose, home.pose);
-	home.pose.orientation = quaternionNorm(home.pose.orientation);
-
-	goal.header.stamp = ros::Time::now();
-	goal.header.frame_id = "j2n6s300_link_base";
-	goal.pose = home.pose;
-	goal.pose.position.x = goal.pose.position.x + 1;
+	geometry_msgs::PoseStamped goal, home, w1, w2;
+	std::vector<geometry_msgs::PoseStamped> waypoints;
 
 	while(true){
 		ros::spinOnce();
+		if (homeSet == false){
+			home = arm->currentPose;
+			ROS_INFO_STREAM("Home position set !!");
+			homeSet = true;
+			continue;
+		}
+
+		goal = home;
+		// Go to a defined cartesian waypoint
+		goal.pose.position.x = goal.pose.position.x + 0.3;
 		arm->sendArmPoseGoal(goal);
 		loop_rate.sleep();
-		arm->sendFingerPoseGoal(float(55)); //Closing
-    		loop_rate.speep();
-    		arm->sendFingerPoseGoal(float(0)); //Opening
-    		loop_rate.sleep();
-    		arm->goHome();
+		// Close all the fingers (Equivalent to object grasping)
+		arm->sendFingerPoseGoal(float(55));
 		loop_rate.sleep();
+		// Open all the fingers
+		arm->sendFingerPoseGoal(float(0));
+		loop_rate.sleep();
+		// Return to home position after the task execution
+		arm->goHome(home);
 		break;
     }
 	return 0;
