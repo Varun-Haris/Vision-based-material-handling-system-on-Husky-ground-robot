@@ -56,9 +56,7 @@ class SegmentationPublish{
   ros::Time point_cloud_time;
   string camera_frame_id;
 
-    SegmentationPublish()
-      :it(nh)
-    {
+  SegmentationPublish():it(nh){
       pub_rgb = it.advertise(PUB_RGB, 5);
       pub_rgb = it.advertise(PUB_DEPTH, 5);
       pub_seg = it.advertise(PUB_SEG, 5);
@@ -202,10 +200,10 @@ int main(int argc, char **argv) {
         //Retrieve left camera frame, depth and point cloud
         zed.retrieveImage(zed_image_left, VIEW_LEFT);
         zed.retrieveImage(depth_map, VIEW_DEPTH);
-	      zed.retrieveMeasure(cloud, MEASURE_XYZRGBA);
+	zed.retrieveMeasure(cloud, MEASURE_XYZRGBA);
         SPObject.publishPointCloud(image_size.width, image_size.height, cloud);
 
-	      //Convert to cv images
+	//Convert to cv images
         cv::Mat input_rgb = slMat2cvMat(zed_image_left);
         cv::Mat input_depth = slMat2cvMat(depth_map);
 
