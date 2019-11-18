@@ -1,8 +1,10 @@
+// General C++ headers
 #include <string>
 #include <algorithm>
 #include <math.h>
 #include <vector>
 
+// ROS include files
 #include <ros/ros.h>
 #include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/PoseStamped.h>
@@ -10,13 +12,14 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/PointCloud.h>
 #include <sensor_msgs/point_cloud_conversion.h>
+
+// Kinova driver specific include files
 #include "kinova_driver/kinova_api.h"
 #include "kinova_driver/kinova_arm.h"
 #include "kinova_driver/kinova_tool_pose_action.h"
 #include "kinova_driver/kinova_joint_angles_action.h"
 #include "kinova_driver/kinova_fingers_action.h"
 #include "kinova_driver/kinova_joint_trajectory_controller.h"
-
 #include <actionlib/client/simple_action_client.h>
 
 // ZED SDK
@@ -31,8 +34,6 @@ typedef actionlib::SimpleActionClient<kinova_msgs::ArmPoseAction> armPose;
 typedef actionlib::SimpleActionClient<kinova_msgs::SetFingersPositionAction> fingerPose;
 
 bool homeSet = false;
-bool waypointSet = false;
-const double FINGER_MAX = 6400;
 const int width = 640;
 const int height = 360;
 
@@ -40,6 +41,7 @@ class armJaco{
 public:
 	ros::NodeHandle nh;
 	ros::Subscriber sub, seg, pc_sub;
+	
 	// The next pose is the pre-grasp pose (0.2 m above the detected object)
 	geometry_msgs::PoseStamped home, currentPose, nextPose, dropPose;
 	geometry_msgs::Vector3 c[width][height];
@@ -57,13 +59,13 @@ public:
 
 	// Pose callback
 	void currentPoseFeedback(const geometry_msgs::PoseStamped& pose){
-	    currentPose = pose;
-
-			if (homeSet == false){
-				home = currentPose;
-				ROS_INFO_STREAM("Home position set !!");
-				homeSet = true;
-			}
+	    	currentPose = pose;
+		
+		if (homeSet == false){
+			home = currentPose;
+			ROS_INFO_STREAM("Home position set !!");
+			homeSet = true;
+		}
 	}
 
 	// Segmented image callback
@@ -109,6 +111,7 @@ public:
 		ROS_INFO_STREAM("Back home");
 	}
 
+	// Classifies whether a given pixel lies inside the identified object from the segmented image
 	void seg2obj(){
 		cv::Mat frame = cvPtr->image;
 		int sum = 0;
@@ -120,7 +123,6 @@ public:
 				else t[i][j] = 1;
 			}
 		}
-	//cout << sum << endl;
 	}
 
 	void computeMidPoint(){
@@ -136,7 +138,6 @@ public:
 				if (!(isnan(point_cloud.points[i*j].y) || isinf(point_cloud.points[i*j].y))) cy = double(point_cloud.points[i*j].y);
 				if (!(isnan(point_cloud.points[i*j].z) || isinf(point_cloud.points[i*j].z))) cz = double(point_cloud.points[i*j].z);
 
-				//cout << point_cloud.points[i*j].x << " " << point_cloud.points[i*j].y << " " << point_cloud.points[i*j].z << endl;
 				c[i][j].x = cx;
 				c[i][j].y = cy;
 				c[i][j].z = cz;
@@ -148,8 +149,8 @@ public:
 				}
 			}
 		}
+		
 		// calculate min and max in each direction
-		//int object_point_count_1 = 0;
 		double max_xdir[2] ;
 		double min_xdir[2] ;
 		double max_ydir[2] ;
@@ -187,12 +188,10 @@ public:
 				}
 			}
 		}
+		
 		max_xdir[1] = -1*max_xdir[1];
-
 		min_xdir[1] = -1*min_xdir[1];
-
 		max_ydir[1] = -1*max_ydir[1];
-
 		min_ydir[1] = -1*min_ydir[1];
 
 
@@ -202,14 +201,11 @@ public:
 		d2 = sqrt((min_xdir[0]-max_ydir[0])*(min_xdir[0]-max_ydir[0])+(min_xdir[1]-max_ydir[1])*(min_xdir[1]-max_ydir[1]));
 		alpha = atan((max_xdir[1]-max_ydir[1])/(max_xdir[0]-max_ydir[0]));
 		alpha = (alpha*180/3.14);
-		if(d2>d1){
-			alpha = (alpha)+90;
-		}
+		if(d2>d1) alpha = (alpha)+90;
 
 		// Mid point in the pixel domain
 		int pixel_x = int(round(sum_x / object_point_count));
 		int pixel_y = int(round(sum_y / object_point_count));
-		//cout << pixel_x << " " << pixel_y << endl;
 
 		// Extract the actual from the point cloud ==> With respect to camera
 		if (abs(pixel_x) < width && abs(pixel_y) < height){
@@ -229,9 +225,11 @@ public:
 		// Trasformation from the camera frame to the hand frame
 		float mean_x_pose, mean_y_pose, mean_z_pose;
 		float delta_x=0, delta_y=350, delta_z=780;
-    mean_x_pose = -(mean_x)/1000+0.08;
-    mean_y_pose = (mean_y + 200)/1000 + 0.06;
-    mean_z_pose = (delta_z - mean_z) /1000 - 0.08;
+		
+		// The actual poses with respect to the base of the arm
+		mean_x_pose = -(mean_x)/1000+0.08;
+		mean_y_pose = (mean_y + 200)/1000 + 0.06;
+		mean_z_pose = (delta_z - mean_z) /1000 - 0.08;
 
 		nextPose.pose.position.x = mean_x_pose;
 		nextPose.pose.position.y = mean_y_pose;
@@ -273,11 +271,10 @@ int main(int argc, char** argv){
 	ros::init(argc, argv, "Jaco");
 	ros::NodeHandle nh;
 	ros::Rate loop_rate(0.2);
+	
 	armJaco *arm = new armJaco;
 	usleep(1000*1000);
-
 	geometry_msgs::PoseStamped goal, home, w1, w2;
-	std::vector<geometry_msgs::PoseStamped> waypoints;
 
 	while(true){
 		ros::spinOnce();
@@ -285,11 +282,12 @@ int main(int argc, char** argv){
 		arm->computeMidPoint();
 		cout << "Next waypoint  is: " << arm->nextPose << endl;
 		loop_rate.sleep();
-		//
-		// Put an if condition to define grasping scenario ==> Constraints when arm can go and grab the object
-		//
-		//arm->grasp();
+		
+		// If the segmented object is within the reach of the arm, go for the pick and place, otherwise ignore the waypoint
+		if (arm->nextPose.pose.position.x > arm->home.pose.position.x + 2){
+			arm->grasp();
+		}
 		//break;
-  }
+	}
 	return 0;
 }
