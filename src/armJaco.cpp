@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <math.h>
 #include <vector>
+#include <stdio.h>
+#include <boost/make_shared.hpp>
 
 // ROS include files
 #include <ros/ros.h>
@@ -12,60 +14,84 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/PointCloud.h>
 #include <sensor_msgs/point_cloud_conversion.h>
-
-// Kinova driver specific include files
+#include <image_transport/image_transport.h>
 #include "kinova_driver/kinova_api.h"
 #include "kinova_driver/kinova_arm.h"
 #include "kinova_driver/kinova_tool_pose_action.h"
 #include "kinova_driver/kinova_joint_angles_action.h"
 #include "kinova_driver/kinova_fingers_action.h"
 #include "kinova_driver/kinova_joint_trajectory_controller.h"
-#include <actionlib/client/simple_action_client.h>
+#include "kinova_driver/kinova_ros_types.h"
 
-// ZED SDK
-#include <sl/Camera.hpp>
+#include <actionlib/client/simple_action_client.h>
 
 using namespace std;
 using namespace cv;
-using namespace sl;
 
 // Setting up the actionlib
 typedef actionlib::SimpleActionClient<kinova_msgs::ArmPoseAction> armPose;
 typedef actionlib::SimpleActionClient<kinova_msgs::SetFingersPositionAction> fingerPose;
 
 bool homeSet = false;
+bool waypointSet = false;
+const double FINGER_MAX = 6400;
 const int width = 640;
 const int height = 360;
 
+//Global point cloud pointer
+//pcl::PointCloud<pcl::PointXYZ>::Ptr point_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+boost::shared_ptr<sensor_msgs::PointCloud2> point_cloud(new sensor_msgs::PointCloud2);
+
+geometry_msgs::Quaternion euler_to_quaterion(double roll, double pitch, double yaw){
+	float cy = cos(yaw*0.5);
+  float sy = sin(yaw*0.5);
+  float cp = cos(pitch*0.5);
+  float sp = sin(pitch*0.5);
+  float cr = cos(roll*0.5);
+  float sr = sin(roll*0.5);
+
+	geometry_msgs::Quaternion quat;
+
+  quat.w = cy * cp * cr + sy * sp * sr;
+  quat.x = cy * cp * sr - sy * sp * cr;
+  quat.y = sy * cp * sr + cy * sp * cr;
+  quat.z = sy * cp * cr - cy * sp * sr;
+
+	return quat;
+}
+
 class armJaco{
 public:
+	image_transport::ImageTransport it;
 	ros::NodeHandle nh;
-	ros::Subscriber sub, seg, pc_sub;
-	
+	ros::Subscriber sub, pc_sub;
+	image_transport::Subscriber seg;
 	// The next pose is the pre-grasp pose (0.2 m above the detected object)
-	geometry_msgs::PoseStamped home, currentPose, nextPose, dropPose;
-	geometry_msgs::Vector3 c[width][height];
-	sensor_msgs::PointCloud point_cloud;
+	geometry_msgs::PoseStamped home, currentPose, nextPose, dropPose, firstPose;
+	geometry_msgs::Vector3 c[width][height], m;
+	geometry_msgs::Point pts;
+
 	int isObject[width][height],t[width][height];
-	float mean_x = 0.0, mean_y = 0.0, mean_z = 0.0;
 	cv_bridge::CvImagePtr cvPtr;
 
-	armJaco():nh(){
+
+	armJaco():nh(), it(nh){
 		sub = nh.subscribe("/j2n6s300_driver/out/tool_pose",1,&armJaco::currentPoseFeedback,this);
-		seg = nh.subscribe("/enet/seg",1,&armJaco::getSegmentedImage,this);
+		seg = it.subscribe("/enet/seg",1,&armJaco::getSegmentedImage,this);
 		pc_sub = nh.subscribe("/enet/point_cloud",1,&armJaco::getPointCloud,this);
 		ROS_INFO_STREAM("Setup successful !!");
 	}
 
 	// Pose callback
 	void currentPoseFeedback(const geometry_msgs::PoseStamped& pose){
-	    	currentPose = pose;
-		
-		if (homeSet == false){
-			home = currentPose;
-			ROS_INFO_STREAM("Home position set !!");
-			homeSet = true;
-		}
+	    currentPose = pose;
+
+			if (homeSet == false){
+				home = currentPose;
+				ROS_INFO_STREAM("Home position set !!");
+				cout << "Home Position \n" << home << endl;
+				homeSet = true;
+			}
 	}
 
 	// Segmented image callback
@@ -74,8 +100,8 @@ public:
 	}
 
 	// Point cloud callback
-	void getPointCloud(const sensor_msgs::PointCloud2& cloud){
-		sensor_msgs::convertPointCloud2ToPointCloud(cloud, point_cloud);
+	void getPointCloud(const boost::shared_ptr<sensor_msgs::PointCloud2> cloud){
+		point_cloud = cloud;
 	}
 
 	void sendArmPoseGoal(geometry_msgs::PoseStamped &goal_pose){
@@ -83,8 +109,9 @@ public:
 	    kinova_msgs::ArmPoseGoal goal;
 	    client.waitForServer();
 
+			goal_pose.header.stamp = ros::Time::now();
+			goal_pose.header.frame_id = "j2n6s300_link_base";
 	    goal.pose = goal_pose;
-	    ROS_INFO_STREAM("Arm pose goal sent !!");
 	    client.sendGoal(goal);
 	}
 
@@ -99,7 +126,6 @@ public:
 		goal.fingers.finger1 = finger_turn;
 		goal.fingers.finger2 = goal.fingers.finger1;
 		goal.fingers.finger3 = goal.fingers.finger2;
-		ROS_INFO_STREAM("Finger goal sent !!");
 		client.sendGoal(goal);
 	}
 
@@ -111,7 +137,35 @@ public:
 		ROS_INFO_STREAM("Back home");
 	}
 
-	// Classifies whether a given pixel lies inside the identified object from the segmented image
+	geometry_msgs::Point pixel2PointCloud(const int u, const int v){
+		int w = point_cloud->width;
+		int h = point_cloud->height;
+
+		cout << "Pointcloud dimensions " << w << " " << h << endl;
+
+		int arrayPos = v*point_cloud->row_step + u*point_cloud->point_step;
+
+		int arrayPosX = arrayPos + point_cloud->fields[0].offset; // X has an offset of 0
+    int arrayPosY = arrayPos + point_cloud->fields[2].offset; // Y has an offset of 4
+    int arrayPosZ = arrayPos + point_cloud->fields[1].offset; // Z has an offset of 8
+
+    float X = 0.0;
+    float Y = 0.0;
+    float Z = 0.0;
+
+		memcpy(&X, &point_cloud->data[arrayPosX], sizeof(float));
+    memcpy(&Y, &point_cloud->data[arrayPosY], sizeof(float));
+    memcpy(&Z, &point_cloud->data[arrayPosZ], sizeof(float));
+
+		geometry_msgs::Point p;
+    // put data into the point p
+    p.x = Y+0.33;
+    p.y = X+0.26;
+    p.z = Z;
+
+		return p;
+	}
+
 	void seg2obj(){
 		cv::Mat frame = cvPtr->image;
 		int sum = 0;
@@ -130,27 +184,37 @@ public:
 
 		double sum_x = 0, sum_y = 0, sum_z = 0, cx = 0, cy = 0, cz = 0;
 		int object_point_count = 0;
+
 		for (int i = 0; i < width; i++){
 			for (int j = 0; j < height; j++){
 				isObject[i][j] = t[i][j];
 
-				if (!(isnan(point_cloud.points[i*j].x) || isinf(point_cloud.points[i*j].x))) cx = double(point_cloud.points[i*j].x);
-				if (!(isnan(point_cloud.points[i*j].y) || isinf(point_cloud.points[i*j].y))) cy = double(point_cloud.points[i*j].y);
-				if (!(isnan(point_cloud.points[i*j].z) || isinf(point_cloud.points[i*j].z))) cz = double(point_cloud.points[i*j].z);
-
-				c[i][j].x = cx;
-				c[i][j].y = cy;
-				c[i][j].z = cz;
-
-				if (isObject[i][j] && c[i][j].z < 0) {
+				if (isObject[i][j]) {
 					sum_x += i;
 					sum_y += j;
 					object_point_count++;
 				}
 			}
 		}
-		
+
 		// calculate min and max in each direction
+		double a;
+		double b;
+		a= 0;
+		b= 0;
+
+		double sigma_x2;
+		double sigma_x;
+		double n;
+		double sigma_xy;
+		double sigma_y;
+
+		sigma_x2 =0;
+		sigma_x =0;
+		n =0;
+		sigma_xy =0;
+		sigma_y =0;
+
 		double max_xdir[2] ;
 		double min_xdir[2] ;
 		double max_ydir[2] ;
@@ -163,9 +227,10 @@ public:
 		max_ydir[1] = 0;
 		min_ydir[0] = height;
 		min_ydir[1] = height;
+
 		for (int i = 0; i < width; i++){
 			for (int j = 0; j < height; j++) {
-				if (isObject[i][j] && c[i][j].z < 0) {
+				if (isObject[i][j]) {
 					//sum_x += i;
 
 					if(i>max_xdir[0]){
@@ -184,14 +249,31 @@ public:
 						min_ydir[0]=i;
 						min_ydir[1]=j;
 					}
+
+					sigma_x += i;
+					sigma_y += -1*j;
+					sigma_xy += i*-1*j;
+					sigma_x2 += i*i;
+					n++;
+
+
 					//object_point_count++;
 				}
 			}
 		}
-		
+
+		a= ((sigma_y*sigma_x2)-(sigma_x*sigma_xy))/((n*sigma_x2)-(sigma_x*sigma_x));
+		b= ((n*sigma_xy)-(sigma_x*sigma_y))/((n*sigma_x2)-(sigma_x*sigma_x));
+
+		double slope;
+		slope = atan(b)*180/3.14;
+
 		max_xdir[1] = -1*max_xdir[1];
+
 		min_xdir[1] = -1*min_xdir[1];
+
 		max_ydir[1] = -1*max_ydir[1];
+
 		min_ydir[1] = -1*min_ydir[1];
 
 
@@ -203,16 +285,20 @@ public:
 		alpha = (alpha*180/3.14);
 		if(d2>d1) alpha = (alpha)+90;
 
-		// Mid point in the pixel domain
 		int pixel_x = int(round(sum_x / object_point_count));
 		int pixel_y = int(round(sum_y / object_point_count));
 
+		float x = sum_x / object_point_count;
+		float y = sum_y / object_point_count;
+
+		printf("Pixel Centroid: %d %d\n", pixel_x, pixel_y);
+
 		// Extract the actual from the point cloud ==> With respect to camera
 		if (abs(pixel_x) < width && abs(pixel_y) < height){
-			mean_x = c[pixel_x][pixel_y].x;
-			mean_y = c[pixel_x][pixel_y].y;
-			mean_z = c[pixel_x][pixel_y].z;
+			pts = pixel2PointCloud(pixel_x,pixel_y);
 		}
+
+		printf("Centroid coordinates: %f %f %f\n", pts.x, pts.y, pts.z);
 
 		// Generate next waypoint based on frame transformation matrices
 		generateNextWaypoint();
@@ -224,40 +310,59 @@ public:
 
 		// Trasformation from the camera frame to the hand frame
 		float mean_x_pose, mean_y_pose, mean_z_pose;
-		float delta_x=0, delta_y=350, delta_z=780;
-		
-		// The actual poses with respect to the base of the arm
-		mean_x_pose = -(mean_x)/1000+0.08;
-		mean_y_pose = (mean_y + 200)/1000 + 0.06;
-		mean_z_pose = (delta_z - mean_z) /1000 - 0.08;
+   		mean_x_pose = pts.x + 0.1;
+    		mean_y_pose = pts.y + 0.4;
+    		mean_z_pose = 0.78 - pts.z;
 
 		nextPose.pose.position.x = mean_x_pose;
 		nextPose.pose.position.y = mean_y_pose;
-		nextPose.pose.position.z = mean_z_pose + 0.2;
+		nextPose.pose.position.z = mean_z_pose + 0.1;
 
 		nextPose.pose.orientation = home.pose.orientation;
 	}
 
 	void grasp(ros::Rate loop_rate){
+		ROS_INFO_STREAM("Moving to firstPose");
+		firstPose.pose.position.x = 0.4;
+		firstPose.pose.position.y = 0.05;
+		firstPose.pose.position.z = 0.3;
+
+		//tf::Quaternion q = kinova::EulerXYZ2Quaternion(float(180), float(0), float(-57.2958)).normalize();
+		// Go to inital pose
+		geometry_msgs::Quaternion q = euler_to_quaterion(double(3.14), double(0), double(-1));
+		firstPose.pose.orientation = q;
+		sendArmPoseGoal(firstPose);
+		ros::Duration(5).sleep();
+
 		// Go to pre-grasp pose
+		ROS_INFO_STREAM("Going to pre-grasp pose");
+		nextPose.pose.orientation = firstPose.pose.orientation;
 		sendArmPoseGoal(nextPose);
 		loop_rate.sleep();
 
 		// Go to grasp pose
-		nextPose.pose.position.z = nextPose.pose.position.z - 0.2;
+		ROS_INFO_STREAM("Going to grasp pose");
+		nextPose.pose.orientation = firstPose.pose.orientation;
+		nextPose.pose.position.z = nextPose.pose.position.z - 0.1;
 		sendArmPoseGoal(nextPose);
 		loop_rate.sleep();
 
 		// Pick up the object
+		ROS_INFO_STREAM("Picking up the object");
 		sendFingerPoseGoal(55);
 		loop_rate.sleep();
 
 		// Move to drop pose
-		dropPose = currentPose;
-		dropPose.pose.position.y = dropPose.pose.position.y + 0.5;
+		ROS_INFO_STREAM("Moving to drop pose");
+		dropPose = nextPose;
+		dropPose.pose.position.z = -0.1;
+		dropPose.pose.orientation = firstPose.pose.orientation;
+		dropPose.pose.position.y = dropPose.pose.position.y - 0.3;
+		sendArmPoseGoal(dropPose);
 		loop_rate.sleep();
 
 		// Drop the object
+		ROS_INFO_STREAM("Dropping object");
 		sendFingerPoseGoal(0);
 		loop_rate.sleep();
 
@@ -271,23 +376,23 @@ int main(int argc, char** argv){
 	ros::init(argc, argv, "Jaco");
 	ros::NodeHandle nh;
 	ros::Rate loop_rate(0.2);
-	
+
 	armJaco *arm = new armJaco;
 	usleep(1000*1000);
-	geometry_msgs::PoseStamped goal, home, w1, w2;
 
 	while(true){
 		ros::spinOnce();
-
 		arm->computeMidPoint();
-		cout << "Next waypoint  is: " << arm->nextPose << endl;
-		loop_rate.sleep();
-		
-		// If the segmented object is within the reach of the arm, go for the pick and place, otherwise ignore the waypoint
-		if (arm->nextPose.pose.position.x > arm->home.pose.position.x + 2){
-			arm->grasp();
+		cout << "Next waypoint  is: " << "\n" << arm->nextPose.pose << endl;
+
+		if(!(isnan(arm->nextPose.pose.position.x) || isnan(arm->nextPose.pose.position.y) || isnan(arm->nextPose.pose.position.z))){
+			if(abs(arm->nextPose.pose.position.x) < 0.5 && abs(arm->nextPose.pose.position.y) < 0.5){
+				arm->grasp(loop_rate);
+				ROS_INFO_STREAM("Pick and place executed !!");
+			}
+			else ROS_WARN("Cant't reach the arm to the pose, please move closer");
+			break;
 		}
-		//break;
-	}
+  }
 	return 0;
 }
