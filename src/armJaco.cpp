@@ -39,23 +39,22 @@ const int width = 640;
 const int height = 360;
 
 //Global point cloud pointer
-//pcl::PointCloud<pcl::PointXYZ>::Ptr point_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 boost::shared_ptr<sensor_msgs::PointCloud2> point_cloud(new sensor_msgs::PointCloud2);
 
 geometry_msgs::Quaternion euler_to_quaterion(double roll, double pitch, double yaw){
 	float cy = cos(yaw*0.5);
-  float sy = sin(yaw*0.5);
-  float cp = cos(pitch*0.5);
-  float sp = sin(pitch*0.5);
-  float cr = cos(roll*0.5);
-  float sr = sin(roll*0.5);
+  	float sy = sin(yaw*0.5);
+  	float cp = cos(pitch*0.5);
+  	float sp = sin(pitch*0.5);
+ 	float cr = cos(roll*0.5);
+  	float sr = sin(roll*0.5);
 
 	geometry_msgs::Quaternion quat;
 
-  quat.w = cy * cp * cr + sy * sp * sr;
-  quat.x = cy * cp * sr - sy * sp * cr;
-  quat.y = sy * cp * sr + cy * sp * cr;
-  quat.z = sy * cp * cr - cy * sp * sr;
+  	quat.w = cy * cp * cr + sy * sp * sr;
+  	quat.x = cy * cp * sr - sy * sp * cr;
+  	quat.y = sy * cp * sr + cy * sp * cr;
+  	quat.z = sy * cp * cr - cy * sp * sr;
 
 	return quat;
 }
