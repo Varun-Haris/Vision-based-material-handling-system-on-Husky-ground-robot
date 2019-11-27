@@ -41,6 +41,7 @@ const int height = 360;
 //Global point cloud pointer
 boost::shared_ptr<sensor_msgs::PointCloud2> point_cloud(new sensor_msgs::PointCloud2);
 
+// Converts the euler angles (in rad) to normalized quaternions
 geometry_msgs::Quaternion euler_to_quaterion(double roll, double pitch, double yaw){
 	float cy = cos(yaw*0.5);
   	float sy = sin(yaw*0.5);
@@ -83,14 +84,13 @@ public:
 
 	// Pose callback
 	void currentPoseFeedback(const geometry_msgs::PoseStamped& pose){
-	    currentPose = pose;
-
-			if (homeSet == false){
-				home = currentPose;
-				ROS_INFO_STREAM("Home position set !!");
-				cout << "Home Position \n" << home << endl;
-				homeSet = true;
-			}
+		currentPose = pose;
+		if (homeSet == false){
+			home = currentPose;
+			ROS_INFO_STREAM("Home position set !!");
+			cout << "Home Position \n" << home << endl;
+			homeSet = true;
+		}
 	}
 
 	// Segmented image callback
@@ -136,6 +136,7 @@ public:
 		ROS_INFO_STREAM("Back home");
 	}
 
+	// Converts pixels (u,v) to (x,y,z) with respect to the camera's frame of reference using corresponding point clouds
 	geometry_msgs::Point pixel2PointCloud(const int u, const int v){
 		int w = point_cloud->width;
 		int h = point_cloud->height;
@@ -145,26 +146,27 @@ public:
 		int arrayPos = v*point_cloud->row_step + u*point_cloud->point_step;
 
 		int arrayPosX = arrayPos + point_cloud->fields[0].offset; // X has an offset of 0
-    int arrayPosY = arrayPos + point_cloud->fields[2].offset; // Y has an offset of 4
-    int arrayPosZ = arrayPos + point_cloud->fields[1].offset; // Z has an offset of 8
+		int arrayPosY = arrayPos + point_cloud->fields[2].offset; // Y has an offset of 4
+    		int arrayPosZ = arrayPos + point_cloud->fields[1].offset; // Z has an offset of 8
 
-    float X = 0.0;
-    float Y = 0.0;
-    float Z = 0.0;
+    		float X = 0.0;
+    		float Y = 0.0;
+    		float Z = 0.0;
 
 		memcpy(&X, &point_cloud->data[arrayPosX], sizeof(float));
-    memcpy(&Y, &point_cloud->data[arrayPosY], sizeof(float));
-    memcpy(&Z, &point_cloud->data[arrayPosZ], sizeof(float));
+    		memcpy(&Y, &point_cloud->data[arrayPosY], sizeof(float));
+    		memcpy(&Z, &point_cloud->data[arrayPosZ], sizeof(float));
 
 		geometry_msgs::Point p;
-    // put data into the point p
-    p.x = Y+0.33;
-    p.y = X+0.26;
-    p.z = Z;
+    		// put data into the point p
+   		p.x = Y+0.33;
+    		p.y = X+0.26;
+    		p.z = Z;
 
 		return p;
 	}
 
+	// Classifies whether a given pixel of the segmented image falls inside the object or not
 	void seg2obj(){
 		cv::Mat frame = cvPtr->image;
 		int sum = 0;
@@ -178,6 +180,7 @@ public:
 		}
 	}
 
+	// Computes the mid-point of the object in pixel values (u,v)
 	void computeMidPoint(){
 		seg2obj();
 
@@ -301,13 +304,13 @@ public:
 
 		// Generate next waypoint based on frame transformation matrices
 		generateNextWaypoint();
-	}	// Compute mid point function
+	}
 
 	void generateNextWaypoint(){
 		nextPose.header.stamp = ros::Time::now();
 		nextPose.header.frame_id = "j2n6s300_link_base";
 
-		// Trasformation from the camera frame to the hand frame
+		// Trasformation from the camera frame to the base of the robotic arm
 		float mean_x_pose, mean_y_pose, mean_z_pose;
    		mean_x_pose = pts.x + 0.1;
     		mean_y_pose = pts.y + 0.4;
@@ -327,11 +330,11 @@ public:
 		firstPose.pose.position.z = 0.3;
 
 		//tf::Quaternion q = kinova::EulerXYZ2Quaternion(float(180), float(0), float(-57.2958)).normalize();
-		// Go to inital pose
+		// Go to inital pose, RPY = (3.14, 0, -1)
 		geometry_msgs::Quaternion q = euler_to_quaterion(double(3.14), double(0), double(-1));
 		firstPose.pose.orientation = q;
 		sendArmPoseGoal(firstPose);
-		ros::Duration(5).sleep();
+		loop_rate.sleep();
 
 		// Go to pre-grasp pose
 		ROS_INFO_STREAM("Going to pre-grasp pose");
@@ -353,7 +356,7 @@ public:
 
 		// Move to drop pose
 		ROS_INFO_STREAM("Moving to drop pose");
-		dropPose = nextPose;
+		dropPose = nextPose; // Next pose still corresponds to the pose 10 cm above the midpoint of the object
 		dropPose.pose.position.z = -0.1;
 		dropPose.pose.orientation = firstPose.pose.orientation;
 		dropPose.pose.position.y = dropPose.pose.position.y - 0.3;
@@ -370,6 +373,8 @@ public:
 		nextPose = home;
 	}
 }; // End of class
+
+// DRIVER CODE
 
 int main(int argc, char** argv){
 	ros::init(argc, argv, "Jaco");
@@ -392,6 +397,6 @@ int main(int argc, char** argv){
 			else ROS_WARN("Cant't reach the arm to the pose, please move closer");
 			break;
 		}
-  }
+	}
 	return 0;
 }
