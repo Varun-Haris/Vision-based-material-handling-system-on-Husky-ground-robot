@@ -41,6 +41,7 @@ public:
     nh.param<std::string>("general/left_camera_frame", mLeftCamFrameId, "left_camera_frame");
   }
 
+  // Get the left camera RGB image
   void getRGBImage(const sensor_msgs::ImageConstPtr& seg_img, const sensor_msgs::CameraInfoConstPtr& info){
     boost::shared_ptr<cv_bridge::CvImage> cvPtr(new cv_bridge::CvImage);
     try{
@@ -52,6 +53,7 @@ public:
     }
   }
 
+  // Publish the segmented image
   void publishImage(cv::Mat out_seg){
     cv_bridge::CvImage seg_bridge;
     sensor_msgs::Image seg_msg;
@@ -74,7 +76,7 @@ int main(int argc, char** argv){
   label_file = ROOT_SAMPLE + "/cityscapes19.png";
 
   // Initialize ROS node
-  ros::init(argc, argv, "ros_caffe_brick");
+  ros::init(argc, argv, "ros_caffe_zed_wrapper");
   segPublish SPObject;
 
   // Initialize calssifier
