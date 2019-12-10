@@ -42,7 +42,6 @@ typedef actionlib::SimpleActionClient<kinova_msgs::ArmPoseAction> armPose;
 typedef actionlib::SimpleActionClient<kinova_msgs::SetFingersPositionAction> fingerPose;
 
 bool homeSet = false;
-const double FINGER_MAX = 6400;
 const int width = 640;
 const int height = 360;
 RNG rng(12345);
@@ -53,43 +52,37 @@ boost::shared_ptr<sensor_msgs::PointCloud2> point_cloud(new sensor_msgs::PointCl
 // Converts euler angles (in rad) to normalized quaternions
 geometry_msgs::Quaternion euler_to_quaterion(double roll, double pitch, double yaw){
 	float cy = cos(yaw*0.5);
-  float sy = sin(yaw*0.5);
-  float cp = cos(pitch*0.5);
-  float sp = sin(pitch*0.5);
-  float cr = cos(roll*0.5);
-  float sr = sin(roll*0.5);
+	  float sy = sin(yaw*0.5);
+	  float cp = cos(pitch*0.5);
+	  float sp = sin(pitch*0.5);
+	  float cr = cos(roll*0.5);
+	  float sr = sin(roll*0.5);
 
-	geometry_msgs::Quaternion quat;
+	  geometry_msgs::Quaternion quat;
 
-  quat.w = cy * cp * cr + sy * sp * sr;
-  quat.x = cy * cp * sr - sy * sp * cr;
-  quat.y = sy * cp * sr + cy * sp * cr;
-  quat.z = sy * cp * cr - cy * sp * sr;
+	  quat.w = cy * cp * cr + sy * sp * sr;
+	  quat.x = cy * cp * sr - sy * sp * cr;
+	  quat.y = sy * cp * sr + cy * sp * cr;
+	  quat.z = sy * cp * cr - cy * sp * sr;
 
 	return quat;
 }
 
-// Signum function
-double sgn(float v) {
-	if (v < 0) return -1;
-	if (v > 0) return 1;
-  return 0;
-}
-
+// Class for the arm node containing necessary attributes and member functions
 class armJaco{
 public:
 	image_transport::ImageTransport it;
 	ros::NodeHandle nh;
 	ros::Subscriber sub, pc_sub;
 	image_transport::Subscriber seg, depth;
+	
 	// The next pose is the pre-grasp pose (0.2 m above the detected object)
 	geometry_msgs::PoseStamped home, currentPose, nextPose, dropPose, firstPose, graspPose;
 	geometry_msgs::Vector3 c[width][height], m;
 	geometry_msgs::Point pts;
-	bool grab;
-
-	int isObject[width][height],t[width][height];
 	cv_bridge::CvImagePtr cvPtr, depthPtr;
+	
+	bool grab;
 	cv::Mat image;
 
 
@@ -105,12 +98,12 @@ public:
 	void currentPoseFeedback(const geometry_msgs::PoseStamped& pose){
 	    currentPose = pose;
 
-			if (homeSet == false){
-				home = currentPose;
-				ROS_INFO_STREAM("Home position set !!");
-				cout << "Home Position \n" << home << endl;
-				homeSet = true;
-			}
+	    if (homeSet == false){
+		    home = currentPose;
+		    ROS_INFO_STREAM("Home position set !!");
+	            cout << "Home Position \n" << home << endl;
+		    homeSet = true;
+	    }
 	}
 
 	// Segmented image callback
@@ -183,8 +176,8 @@ public:
 
 		geometry_msgs::Point p;
 		// put data into the point p
-		p.x = -X; //Y+0.33;
-		p.y = -Y; //X+0.26;
+		p.x = -X; 
+		p.y = -Y; 
 		// Use the depth image from z for accurate depth estimation
 		p.z = depthPtr->image.at<float>(u,v);
 
@@ -206,7 +199,7 @@ public:
 		seg2obj();
 		cv::Mat cImage, canny;
 
-		// To find the centroid
+		// To find the pixel centroids of various objects in the frame
 		vector<vector<Point> > contours;
 		vector<Vec4i> hierarchy;
 		findContours(image, contours, hierarchy, CV_RETR_TREE, CV_CHAIN_APPROX_SIMPLE, Point(0,0));
@@ -214,6 +207,7 @@ public:
 		if(!contours.size()) return;
 		cout << contours.size() << endl;
 
+		// This calculates the centroid of the object closest to the origin of the camera
 		Point2f centroid;
 		for(int i=0;i<contours.size();i++){
 			Moments m = moments(contours[i], false);
@@ -227,6 +221,7 @@ public:
 		vector<Vec2f> lines;
 		HoughLines(canny, lines, 1, CV_PI/180, 40, 0, 0);
 
+		// Display the hough lines (can be commented out for faster operation)
 		for( size_t i = 0; i < lines.size(); i++ ){
 		     float rho = lines[i][0], theta = lines[i][1];
 		     Point pt1, pt2;
@@ -240,6 +235,7 @@ public:
 		}
 
 		 if(abs(centroid.x) < width && abs(centroid.y) < height){
+			 // Get the 3D coordinates (pose) with respect to the camera
 			 pts = pixel2PointCloud(centroid.x,centroid.y);
 		 }
 		 else{
@@ -272,9 +268,14 @@ public:
 			mean_y_pose = pts.y + 0.26;
 			mean_z_pose = 0.77 - pts.z;
 
+			// Arm has a mean error of 9cm in the x direction
+			// The z-coordinate of the waypoint is 10cm above the object
 			nextPose.pose.position.x = mean_x_pose - 0.09;
 			nextPose.pose.position.y = mean_y_pose;
 			nextPose.pose.position.z = mean_z_pose + 0.1;
+			// Capping off the z value 
+			// This is to ensure that the arm doesn't go too low to a pose where the fingers can't close
+			// This is primarily to overcome the depth estimation issue of the zed camera
 			if (nextPose.pose.position.z < -0.1635) nextPose.pose.position.z = -0.1635;
 			nextPose.pose.orientation = home.pose.orientation;
 
