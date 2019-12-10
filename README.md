@@ -7,7 +7,8 @@ Dependencies :-
 3) geometry_msgs
 4) kinova_msgs
 5) image_transport
-6) kinova arm driver packages for ROS kinetic
+6) cv_bridge
+7) kinova arm driver packages for ROS kinetic
 
 Steps to run :-
 1) Launch the arm driver --> roslaunch kinova_bringup kinova_robot.launch**
