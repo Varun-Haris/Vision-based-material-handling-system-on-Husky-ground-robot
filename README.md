@@ -14,7 +14,7 @@ Steps to run :-
 1) Launch the arm driver --> roslaunch kinova_bringup kinova_robot.launch**
 2) Launch zed ros wrapper --> roslaunch zed_wrapper zed.launch
 3) Run the segmentation code --> rosrun **your_package_name** ros_caffe_zed***
-4) Run the arm grasping code --> rosrun **yout_package_name** armJaco
+4) Run the arm grasping code --> rosrun **your_package_name** armJaco
 
 ** the default robot type is 6DoF arm (j2n6s300), if you want to use another type, add the arguement kinova_robotType=your_robot_type
 
